@@ -235,6 +235,19 @@ table.board tr.top td.rank { color: var(--signal); font-weight: 700; }
   white-space: nowrap;
 }
 .tag.watch { border-color: var(--signal-dim); color: var(--signal); }
+.tag.warn { border-color: #6b4d1c; color: var(--amber); }
+.proto-flags { margin-top: 4px; display: flex; gap: 5px; flex-wrap: wrap; }
+.flag {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid #6b4d1c;
+  border-radius: 99px;
+  color: var(--amber);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.range { color: var(--faint); font-size: 11.5px; font-weight: 400; margin-top: 1px; }
 .chains { color: var(--muted); font-size: 13px; }
 .pos { color: var(--signal); }
 .neg { color: var(--red); }
@@ -325,8 +338,15 @@ table.mini td.num, table.mini th.num { text-align: right; font-family: var(--mon
 .why table { width: 100%; border-collapse: collapse; }
 .why td { padding: 6px 8px; border-bottom: 1px solid var(--line-soft); }
 .why td.num { text-align: right; font-family: var(--mono); }
-.why tr.total td { border-bottom: none; font-weight: 700; color: var(--signal); }
+.why tr.total td { font-weight: 700; color: var(--signal); }
+.why tr.range-row td { border-bottom: none; color: var(--muted); }
 .why .what { color: var(--muted); font-size: 13.5px; }
+
+.risks { margin-top: 22px; }
+.risks ul { list-style: none; margin: 0; padding: 0; }
+.risks li { padding: 7px 0; border-bottom: 1px solid var(--line-soft); color: var(--muted); font-size: 14px; }
+.risks li:last-child { border-bottom: none; }
+.risks .flag { margin-right: 6px; }
 
 .plan { margin-top: 22px; }
 .plan ol { list-style: none; margin: 0; padding: 0; counter-reset: step; }

@@ -1,6 +1,6 @@
-// The token radar's model (radar-2): one sealed snapshot of the protocol universe in, one ranked
-// board of pre-token protocols out, every row carrying the value the model claims for its launch
-// and the steps to farm it.
+// The token radar's model (radar-3): one sealed snapshot of the protocol universe in, one ranked
+// board of pre-token protocols out, every row carrying the value the model claims for its launch,
+// the range that claim honestly spans, and the steps to farm it.
 //
 // Where radar-1 (the house starter) priced every launch at one flat multiple of TVL, this model
 // calibrates the multiple from the snapshot itself. The snapshot's token-bearing protocols are the
@@ -24,6 +24,19 @@
 //   maturityMult           = 0.75 + 0.45 x min(age_days, 1460) / 1460   (age unknown: 300 days)
 //   footprintMult          = 1 + 0.03 x min(chains - 1, 7)
 //   implied_value_usd      = max(1, round(base x momentumMult x maturityMult x footprintMult))
+//
+// Radar-3 adds the honesty layer around that central claim, because the snapshot's peer evidence
+// is uneven: only 128 of its 416 token-bearing protocols carry a market cap a multiple can be
+// read from, and most categories are priced by a handful of peers — the board's largest claim
+// rests on a category priced by one. So every category also publishes its peer ratios' 25th and
+// 75th percentiles, shrunk toward the universe's quartiles by the same K, and every row carries
+// the implied value at those two multiples beside the central one (implied_low_usd,
+// implied_high_usd): a category priced by one peer inherits most of the universe's spread, so
+// its range is wide, and the width is the disclosure. Each row is also graded on the evidence
+// behind its multiple (deep / fair / thin / universe) and flagged where its own record warns
+// the reader — a multiple resting on two prints, TVL falling fast, one hot week carrying the
+// momentum, a short or unrecorded tokenless history, a single chain. The central estimate, and
+// with it every rank, is radar-2's unchanged: the range describes the claim, it does not move it.
 //
 // The board ranks every protocol that records no token and is not a wrapped, staked or bridged
 // product of one that trades — the watchlist's own definition, applied at every size, not only
@@ -55,7 +68,7 @@ export interface Snapshot {
 }
 
 /** The model's version label, stated on the dashboard. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** The model's constants, stated on the dashboard so the claim can be re-run by hand. */
 export const MODEL = {
@@ -117,16 +130,38 @@ function median(values: number[]): number {
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
-/** One category's peer evidence: how many token-bearing peers priced it, and at what shrunk multiple. */
+/** The q-quantile of a non-empty list of numbers, linear interpolation between closest ranks. */
+function quantile(values: number[], q: number): number {
+  const sorted = [...values].sort((x, y) => x - y);
+  if (sorted.length === 1) return sorted[0]!;
+  const at = (sorted.length - 1) * q;
+  const lo = Math.floor(at);
+  const hi = Math.ceil(at);
+  if (lo === hi) return sorted[lo]!;
+  return sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (at - lo);
+}
+
+/**
+ * One category's peer evidence: how many token-bearing peers priced it, the shrunk multiple it
+ * is priced at, and the shrunk 25th/75th percentile multiples that bound its honest range.
+ */
 export interface CategoryMultiple {
   category: string;
   peers: number;
   raw_median: number | null;
   multiple: number;
+  p25: number;
+  p75: number;
 }
 
-/** The peer table the model prices from: every category's shrunk market-cap-to-TVL multiple. */
-export function peerMultiples(snapshot: Snapshot): { global: number; byCategory: Map<string, CategoryMultiple> } {
+/** The peer table the model prices from: every category's shrunk market-cap-to-TVL multiples. */
+export function peerMultiples(snapshot: Snapshot): {
+  global: number;
+  globalP25: number;
+  globalP75: number;
+  peersPriced: number;
+  byCategory: Map<string, CategoryMultiple>;
+} {
   const rawByCategory = new Map<string, number[]>();
   const allRaw: number[] = [];
   for (const p of snapshot.protocols) {
@@ -144,30 +179,63 @@ export function peerMultiples(snapshot: Snapshot): { global: number; byCategory:
   const winsor = (r: number): number => Math.min(r, cap);
   const all = allRaw.map(winsor);
   const global = all.length > 0 ? median(all) : 0.2;
+  const globalP25 = all.length > 0 ? quantile(all, 0.25) : 0.05;
+  const globalP75 = all.length > 0 ? quantile(all, 0.75) : 0.6;
+  // One statistic of a peer set, shrunk toward the same statistic of the universe by the peer
+  // count and capped like the central multiple: the quartiles get the median's own treatment,
+  // so a thin category's range is pulled toward the universe's spread, never invented.
+  const shrink = (n: number, value: number, universe: number): number =>
+    Math.min((n * value + MODEL.peer_shrink_k * universe) / (n + MODEL.peer_shrink_k), 3);
   const byCategory = new Map<string, CategoryMultiple>();
   for (const [category, rawRatios] of rawByCategory) {
     const ratios = rawRatios.map(winsor);
-    const raw = median(ratios);
-    const shrunk = (ratios.length * raw + MODEL.peer_shrink_k * global) / (ratios.length + MODEL.peer_shrink_k);
-    byCategory.set(category, { category, peers: ratios.length, raw_median: raw, multiple: Math.min(shrunk, 3) });
+    byCategory.set(category, {
+      category,
+      peers: ratios.length,
+      raw_median: median(ratios),
+      multiple: shrink(ratios.length, median(ratios), global),
+      p25: shrink(ratios.length, quantile(ratios, 0.25), globalP25),
+      p75: shrink(ratios.length, quantile(ratios, 0.75), globalP75),
+    });
   }
-  return { global, byCategory };
+  return { global, globalP25, globalP75, peersPriced: all.length, byCategory };
+}
+
+/** The peer set one protocol is priced from: its category's, or the universe's when it has none. */
+interface PeerSet {
+  global: number;
+  globalP25: number;
+  globalP75: number;
+  byCategory: Map<string, CategoryMultiple>;
 }
 
 /** The multiple one protocol is priced at: its category's shrunk peer multiple, or the global one. */
-function multipleFor(p: SnapshotProtocol, peers: { global: number; byCategory: Map<string, CategoryMultiple> }): CategoryMultiple {
+function multipleFor(p: SnapshotProtocol, peers: PeerSet): CategoryMultiple {
   const found = peers.byCategory.get(p.category ?? 'Uncategorised');
   if (found !== undefined) return found;
-  return { category: p.category ?? 'Uncategorised', peers: 0, raw_median: null, multiple: peers.global };
+  return { category: p.category ?? 'Uncategorised', peers: 0, raw_median: null, multiple: peers.global, p25: peers.globalP25, p75: peers.globalP75 };
+}
+
+/** How much peer evidence stands behind a multiple, graded for the reader. */
+export type Evidence = 'deep' | 'fair' | 'thin' | 'universe';
+
+/** The evidence grade for a peer count: 8+ prints is a market, 1-2 is an anecdote with shrinkage. */
+export function evidenceFor(peerCount: number): Evidence {
+  if (peerCount >= 8) return 'deep';
+  if (peerCount >= 3) return 'fair';
+  if (peerCount >= 1) return 'thin';
+  return 'universe';
 }
 
 /** The three adjustments and the implied value one protocol gets, with every figure exposed. */
 export function impliedValue(
   p: SnapshotProtocol,
   asOf: string,
-  peers: { global: number; byCategory: Map<string, CategoryMultiple> },
+  peers: PeerSet,
 ): {
   implied: number;
+  impliedLow: number;
+  impliedHigh: number;
   peer: CategoryMultiple;
   momentumMult: number;
   maturityMult: number;
@@ -184,8 +252,32 @@ export function impliedValue(
   const maturityMult = MODEL.maturity_base + (Math.min(Math.max(ageForModel, 0), MODEL.maturity_days) / MODEL.maturity_days) * MODEL.maturity_range;
   const extraChains = Math.min(Math.max(p.chains.length - 1, 0), MODEL.footprint_max_extra_chains);
   const footprintMult = 1 + MODEL.footprint_per_chain * extraChains;
-  const implied = Math.max(1, Math.round(p.tvl_usd * peer.multiple * momentumMult * maturityMult * footprintMult));
-  return { implied, peer, momentumMult, maturityMult, footprintMult, age, growthPct };
+  const rest = momentumMult * maturityMult * footprintMult;
+  const implied = Math.max(1, Math.round(p.tvl_usd * peer.multiple * rest));
+  // The same claim at the category's shrunk quartile multiples: the range the peer evidence
+  // supports, clamped around the central value so rounding can never invert it.
+  const impliedLow = Math.max(1, Math.min(implied, Math.round(p.tvl_usd * peer.p25 * rest)));
+  const impliedHigh = Math.max(implied, Math.round(p.tvl_usd * peer.p75 * rest));
+  return { implied, impliedLow, impliedHigh, peer, momentumMult, maturityMult, footprintMult, age, growthPct };
+}
+
+/**
+ * The warnings one protocol's own record raises, in the order a reader should meet them.
+ * Every flag is a threshold on a figure the row itself publishes; none names a protocol.
+ */
+export function flagsFor(
+  p: SnapshotProtocol,
+  v: { peer: CategoryMultiple; momentumMult: number; age: number | null },
+): string[] {
+  const flags: string[] = [];
+  if (v.peer.peers === 0) flags.push('no-category-peers');
+  else if (v.peer.peers <= 2) flags.push('thin-evidence');
+  if (typeof p.change_7d === 'number' && Number.isFinite(p.change_7d) && p.change_7d <= -15) flags.push('tvl-falling-fast');
+  if (v.momentumMult >= 1.45) flags.push('one-hot-week');
+  if (v.age === null) flags.push('age-unrecorded');
+  else if (v.age < 180) flags.push('young');
+  if (p.chains.length <= 1) flags.push('single-chain');
+  return flags;
 }
 
 const round4 = (n: number): number => Math.round(n * 1e4) / 1e4;
@@ -222,9 +314,15 @@ export interface BoardRow {
   watchlist: boolean;
   age_days: number | null;
   implied_value_usd: number;
+  implied_low_usd: number;
+  implied_high_usd: number;
+  evidence: Evidence;
+  flags: string[];
   conviction: number;
   model: {
     peer_multiple: number;
+    peer_multiple_p25: number;
+    peer_multiple_p75: number;
     peer_count: number;
     global_multiple: number;
     momentum_multiplier: number;
@@ -259,10 +357,12 @@ export interface RadarData {
     board_size: number;
     watchlist_size: number;
     live_size: number;
+    token_bearing: number;
+    peers_priced: number;
     aggregate_implied_usd: number;
     global_multiple: number;
   };
-  categories: { category: string; peers: number; multiple: number }[];
+  categories: { category: string; peers: number; multiple: number; multiple_p25: number; multiple_p75: number; evidence: Evidence }[];
   rows: BoardRow[];
   live: LiveRow[];
 }
@@ -514,9 +614,15 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     watchlist: watch.has(s.p.slug),
     age_days: s.v.age,
     implied_value_usd: s.v.implied,
+    implied_low_usd: s.v.impliedLow,
+    implied_high_usd: s.v.impliedHigh,
+    evidence: evidenceFor(s.v.peer.peers),
+    flags: flagsFor(s.p, s.v),
     conviction: s.signal,
     model: {
       peer_multiple: round4(s.v.peer.multiple),
+      peer_multiple_p25: round4(s.v.peer.p25),
+      peer_multiple_p75: round4(s.v.peer.p75),
       peer_count: s.v.peer.peers,
       global_multiple: round4(peers.global),
       momentum_multiplier: round4(s.v.momentumMult),
@@ -563,11 +669,20 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       board_size: board.length,
       watchlist_size: snapshot.watchlist.length,
       live_size: snapshot.protocols.length - preToken,
+      token_bearing: snapshot.protocols.length - preToken,
+      peers_priced: peers.peersPriced,
       aggregate_implied_usd: board.reduce((sum, r) => sum + r.implied_value_usd, 0),
       global_multiple: round4(peers.global),
     },
     categories: [...peers.byCategory.values()]
-      .map((c) => ({ category: c.category, peers: c.peers, multiple: round4(c.multiple) }))
+      .map((c) => ({
+        category: c.category,
+        peers: c.peers,
+        multiple: round4(c.multiple),
+        multiple_p25: round4(c.p25),
+        multiple_p75: round4(c.p75),
+        evidence: evidenceFor(c.peers),
+      }))
       .sort((a, b) => b.peers - a.peers || (a.category < b.category ? -1 : 1)),
     rows: board,
     live,
@@ -596,6 +711,9 @@ export function boardIssue(board: BoardRow[], snapshot: Snapshot): string | null
   for (const r of board) {
     if (!Number.isSafeInteger(r.implied_value_usd) || r.implied_value_usd <= 0 || r.implied_value_usd > 100_000_000_000_000) {
       return `${r.slug} has implied value ${r.implied_value_usd}`;
+    }
+    if (r.implied_low_usd > r.implied_value_usd || r.implied_high_usd < r.implied_value_usd) {
+      return `${r.slug} has an implied range ${r.implied_low_usd} to ${r.implied_high_usd} that does not hold its value ${r.implied_value_usd}`;
     }
     if (r.farm_steps.length < 3 || r.farm_steps.length > 12) return `${r.slug} has ${r.farm_steps.length} farm steps`;
     for (const s of r.farm_steps) {

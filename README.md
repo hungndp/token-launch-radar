@@ -16,6 +16,10 @@ this token be worth — and how far is the market from that number?*
 - Implied value = the candidate's own fundamentals priced at the peer
   group's median multiple. The board ranks all 198 scored candidates by
   the gap between implied and actual pricing.
+- Every row also carries an implied range (peer p25–p75), an evidence
+  grade (how many token-bearing peers priced it) and risk flags — the
+  model states its own uncertainty instead of letting one thin peer
+  print carry a claim.
 - Fully deterministic: the same snapshot always produces the same board.
 
 ## Run it
