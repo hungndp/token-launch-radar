@@ -1,16 +1,18 @@
 'use strict';
 /*
- * Token Launch Radar — dashboard (radar-4).
+ * Token Launch Radar — dashboard (radar-5).
  *
  * One static page, no network: window.RADAR (data.js, written by main.ts) is the whole dataset.
- * The board ranks every pre-token protocol the sealed snapshot lets the model price, each with
- * the fitted model's value, the range 200 bootstrap refits put around it, three comparable
- * lenses with the traded protocols behind them named, a 0-100 confidence, and a farm plan
- * netted to a verdict. Around the board: the full launched set (every token-bearing protocol,
- * not a sample), the set-aside annex (every pre-token protocol not ranked, each with its
- * reason), and the method page, which publishes the leave-one-out contest that chose the
- * pricing model. Hash routes: #/ the board, #/live the launched set, #/set-aside the annex,
- * #/method the method, #/p/<slug> one protocol.
+ * The board ranks every pre-token protocol in the sealed snapshot — all 342, the watchlist
+ * included and the products of already-traded tokens included, those priced with a published
+ * product discount stated on their rows — each with the fitted model's value, the range 200
+ * bootstrap refits put around it, three comparable lenses with the traded protocols behind
+ * them named, a 0-100 confidence, and a farm plan netted to a verdict. Around the board: the
+ * full launched set (every token-bearing protocol, not a sample), the products view (every
+ * discounted row with its class, its curve value and its reason), and the method page, which
+ * publishes the leave-one-out contest that chose the pricing model. Hash routes: #/ the
+ * board, #/live the launched set, #/products the discounted rows, #/method the method,
+ * #/p/<slug> one protocol.
  */
 const R = window.RADAR;
 const rows = R.rows;
@@ -32,6 +34,7 @@ const ageText = (d) => (d === null || d === undefined ? 'unrecorded' : d >= 730 
 const chainList = (cs) => (cs.length === 0 ? '—' : cs.length <= 2 ? cs.join(', ') : cs.slice(0, 2).join(', ') + ' +' + (cs.length - 2));
 const evText = { deep: 'deep', fair: 'fair', thin: 'thin', universe: 'universe' };
 const flagText = {
+  'traded-parent-product': 'a product of a token that already trades — ranked with the product discount',
   'no-category-peers': 'no traded peer in its category — priced on the universe',
   'thin-evidence': 'one or two traded peers in its category',
   'lenses-disagree': 'its three comparable lenses disagree by 1.5× or more',
@@ -58,7 +61,7 @@ function header(active) {
       <div class="kpi"><b>${s.protocols}</b><span>protocols scanned</span></div>
       <div class="kpi"><b>${s.board_size}</b><span>ranked pre-token</span></div>
       <div class="kpi"><b>${s.live_size}</b><span>already launched</span></div>
-      <div class="kpi"><b>${s.excluded_size}</b><span>set aside, with reasons</span></div>
+      <div class="kpi"><b>${s.products_size}</b><span>ranked with a product discount</span></div>
       <div class="kpi"><b>${s.peers_priced}</b><span>traded peers fitted</span></div>
       <div class="kpi"><b>${fmt(s.aggregate_implied_usd)}</b><span>aggregate implied value</span></div>
       <div class="kpi"><b>${s.avg_distinct_peers}</b><span>avg peers behind a row</span></div>
@@ -67,7 +70,7 @@ function header(active) {
     <nav class="tabs">
       <a href="#/" class="${active === 'board' ? 'on' : ''}">Board</a>
       <a href="#/live" class="${active === 'live' ? 'on' : ''}">Launched (${s.live_size})</a>
-      <a href="#/set-aside" class="${active === 'aside' ? 'on' : ''}">Set aside (${s.excluded_size})</a>
+      <a href="#/products" class="${active === 'products' ? 'on' : ''}">Products (${s.products_size})</a>
       <a href="#/method" class="${active === 'method' ? 'on' : ''}">Method &amp; validation</a>
     </nav>
   </header>`;
@@ -93,7 +96,7 @@ function boardView() {
   list = [...list].sort(SORTS[state.sort]);
   const body = list.map((r) => `<tr data-slug="${esc(r.slug)}">
     <td class="num"><b>#${r.rank}</b><span class="rng">ranks ${r.rank_low}–${r.rank_high}</span></td>
-    <td><a class="nm" href="#/p/${esc(r.slug)}">${esc(r.name)}</a>${r.watchlist ? ' <span class="wl">watchlist</span>' : ''}<span class="slug">${esc(r.slug)}</span></td>
+    <td><a class="nm" href="#/p/${esc(r.slug)}">${esc(r.name)}</a>${r.watchlist ? ' <span class="wl">watchlist</span>' : ''}${r.product_reason ? ` <span class="prod">product ×${r.model.product_haircut}</span>` : ''}<span class="slug">${esc(r.slug)}</span></td>
     <td>${esc(r.category || '—')}</td>
     <td class="num">${fmt(r.tvl_usd)}</td>
     <td class="num ${r.change_7d === null ? '' : r.change_7d >= 0 ? 'up' : 'dn'}">${signedPct(r.change_7d)}</td>
@@ -116,7 +119,7 @@ function boardView() {
       <thead><tr><th>Rank</th><th>Protocol</th><th>Category</th><th class="num">TVL</th><th class="num">7d</th><th class="num">Implied value (refit range)</th><th>Confidence</th><th class="num">Signal</th><th>Verdict</th><th>Evidence</th></tr></thead>
       <tbody>${body || '<tr><td colspan="10" class="empty">No ranked protocol matches.</td></tr>'}</tbody>
     </table></div>
-    <p class="note">Implied value is the winning model's point estimate; the range under it is the 10th–90th percentile of 200 bootstrap refits of that model, and the rank range is the refits' 5th–95th. Confidence scores how many distinct traded peers stand behind a row's three lenses and how closely the lenses agree. Open any row for its named comparables, its netted farm plan and what could make its estimate wrong.</p>
+    <p class="note">Implied value is the winning model's point estimate; the range under it is the 10th–90th percentile of 200 bootstrap refits of that model, and the rank range is the refits' 5th–95th. Confidence scores how many distinct traded peers stand behind a row's three lenses and how closely the lenses agree. Rows chipped <i>product</i> are products of a token that already trades: the model values their business on the curve, then applies the product discount printed in the chip — their pages show both steps. Open any row for its named comparables, its netted farm plan and what could make its estimate wrong.</p>
   </main>` + footer();
   bindBoard();
 }
@@ -145,20 +148,29 @@ function liveView() {
   input.addEventListener('input', () => { state.liveQ = input.value.toLowerCase(); const pos = input.selectionStart; liveView(); const el = document.getElementById('liveq'); el.focus(); el.setSelectionRange(pos, pos); });
 }
 
-function asideView() {
-  const body = R.excluded.map((r) => `<tr>
-    <td><span class="nm2">${esc(r.name)}</span><span class="slug">${esc(r.slug)}</span></td>
+function productsView() {
+  const list = rows.filter((r) => r.product_reason !== null);
+  const body = list.map((r) => `<tr data-slug="${esc(r.slug)}">
+    <td class="num"><b>#${r.rank}</b></td>
+    <td><a class="nm" href="#/p/${esc(r.slug)}">${esc(r.name)}</a><span class="slug">${esc(r.slug)}</span></td>
     <td>${esc(r.category || '—')}</td>
     <td class="num">${fmt(r.tvl_usd)}</td>
-    <td class="why">${esc(r.reason)}</td>
+    <td class="num">${fmt(r.model.gross_value_usd)}</td>
+    <td class="num">×${r.model.product_haircut}</td>
+    <td class="num"><b>${fmt(r.implied_value_usd)}</b></td>
+    <td class="why">${esc(r.product_reason)}</td>
   </tr>`).join('');
-  app.innerHTML = header('aside') + `<main>
-    <p class="note">Every pre-token protocol the board does not rank, with the reason printed next to it — nothing is silently dropped. A protocol is set aside when the snapshot's own record gives the model nothing honest to price: the product screen (a wrapper, index, aggregator, locker, issuer or fund of other protocols, or a bridge or infrastructure entry) marks it a claim on other protocols rather than a launch candidate, or its category is outside the scored list. The watchlist is never set aside: all ${R.stats.watchlist_size} watchlist protocols are ranked on the board whatever their record says.</p>
+  app.innerHTML = header('products') + `<main>
+    <p class="note">Every ranked protocol the snapshot's own record marks as a product of a token that already trades — the screen the house's watchlist reads: a product category (liquid staking, restaking, bridge, canonical bridge, CEX), a version marker at the end of the name, a whole word wrapped, staked or staking in the name, or an exchange's name at its start. An earlier version of this radar set these ${list.length} protocols aside; this one ranks them, because the watchlist is a floor, never a ceiling. Each is priced in two printed steps: the fitted model values the business its TVL describes (the curve value), then the product discount cuts that to the share a token issued by the product itself could claim — the assets parked in a wrapper belong to the parent token's holders, not to a new token. The discounts are the model's published constants: ×${R.model.haircut_exchange} for an exchange's entry, ×${R.model.haircut_wrapper} for a wrapper or staking product, ×${R.model.haircut_bridge} for a bridge product, ×${R.model.haircut_version} for a numbered version of a traded protocol. Open any row for the full reasoning.</p>
     <div class="twrap"><table>
-      <thead><tr><th>Protocol</th><th>Category</th><th class="num">TVL</th><th>Why it is not ranked</th></tr></thead>
+      <thead><tr><th>Rank</th><th>Protocol</th><th>Category</th><th class="num">TVL</th><th class="num">Curve value</th><th class="num">Discount</th><th class="num">Implied value</th><th>Why it is discounted</th></tr></thead>
       <tbody>${body}</tbody>
     </table></div>
   </main>` + footer();
+  document.querySelectorAll('tbody tr[data-slug]').forEach((tr) => tr.addEventListener('click', (e) => {
+    if (e.target.closest('a')) return;
+    location.hash = '#/p/' + tr.dataset.slug;
+  }));
 }
 
 function lensBlock(title, lens, note) {
@@ -172,14 +184,19 @@ function lensBlock(title, lens, note) {
 
 function detailView(r) {
   const m = r.model;
-  const stats = [
+  const statRows = [
     ['TVL', fmt(r.tvl_usd)], ['7d change', signedPct(r.change_7d)], ['Category', esc(r.category || '—')],
     ['Chains', esc(chainList(r.chains))], ['Age on record', ageText(r.age_days)], ['Listed', r.listed_at || '—'],
     ['Signal', r.conviction + ' / 100'], ['Confidence', r.confidence + ' / 100'],
     ['Fitted model', esc(R.validation.winner_name)], ['Category multiple', pct(m.peer_multiple) + ` (${m.peer_count} peer${m.peer_count === 1 ? '' : 's'})`],
     ['Momentum ×', m.momentum_multiplier.toFixed(2)], ['Maturity ×', m.maturity_multiplier.toFixed(2)], ['Footprint ×', m.footprint_multiplier.toFixed(2)],
-  ].map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join('');
+  ];
+  if (r.product_reason) {
+    statRows.push(['Curve value', fmt(m.gross_value_usd)], ['Product discount', '×' + m.product_haircut]);
+  }
+  const stats = statRows.map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join('');
   const wrong = [];
+  if (r.product_reason) wrong.push(`This row is a product of a token that already trades — ${r.product_reason}. The fitted model values the business its ${fmt(r.tvl_usd)} of TVL describes at ${fmt(m.gross_value_usd)}; the board then applies the ×${m.product_haircut} product discount, because a token issued here could claim the product's own fees and governance, not the assets parked in it, which belong to the parent token's holders. The discount is a stated constant of the model, printed so it can be argued with: if the parent folded this product into its own token instead, the honest value of a separate launch is nearer zero than the discounted figure; if the product were spun out with its fee stream intact, it could be worth more.`);
   if (r.flags.includes('lenses-disagree')) wrong.push(`Its three lenses disagree by ${m.lens_spread.toFixed(1)}× — the category lens reads ${fmt(m.lens_category_usd)}, the chain lens ${fmt(m.lens_chain_usd)} and the scale lens ${fmt(m.lens_scale_usd)}. The board prints the fitted model's value because leave-one-out says the fitted read is the least wrong of the candidates tested; if the category's small traded names are the truer guide, this row is worth far more than printed, and if the giants' pricing is, far less.`);
   if (r.evidence === 'universe') wrong.push(`No protocol in its category carries both a market cap and a TVL, so the fitted model prices it from the universe's own shape with no category evidence at all. One comparable launch in its category would move this number more than any other single fact.`);
   else if (r.evidence === 'thin') wrong.push(`Only ${m.peer_count} traded peer${m.peer_count === 1 ? '' : 's'} price its category. The shrinkage toward the universe median is doing real work here; a single new listing in the category could move the multiple, and this row with it.`);
@@ -192,13 +209,13 @@ function detailView(r) {
     <p class="back"><a href="#/">← Back to the board</a></p>
     <div class="dhead"><div>
       <h2>#${r.rank} · ${esc(r.name)} ${r.watchlist ? '<span class="wl">watchlist</span>' : ''}</h2>
-      <p class="sub2">${esc(r.slug)} · ${esc(r.category || 'Uncategorised')} · pre-token</p>
+      <p class="sub2">${esc(r.slug)} · ${esc(r.category || 'Uncategorised')} · pre-token${r.product_reason ? ' · product of a traded token' : ''}</p>
     </div><div class="bigval"><span>Implied value</span><b>${fmt(r.implied_value_usd)}</b><span class="rng2">refits ${fmt(r.implied_low_usd)} – ${fmt(r.implied_high_usd)} · ranks #${r.rank_low}–#${r.rank_high}</span></div></div>
     <div class="vbanner">${verdictChip(r.farm.verdict)}<p><b>Farm verdict: ${r.farm.verdict}.</b> ${esc(r.farm.verdict_reason)}</p></div>
     <div class="grid">${stats}</div>
     ${r.flags.length ? `<div class="flags">${r.flags.map((f) => `<span class="flag">${esc(flagText[f] || f)}</span>`).join('')}</div>` : ''}
     <h3>Comparables — three lenses, named peers</h3>
-    <p class="note">The fitted model prints the headline value; these three lenses cross-examine it. Each reads a shrunk median market-cap-to-TVL multiple from its own peer set, applies this protocol's momentum, maturity and footprint adjustments, and names the largest traded protocols behind the number. ${r.model.distinct_peers} distinct traded peers stand behind this row across the three sets.</p>
+    <p class="note">The fitted model prints the headline value; these three lenses cross-examine it. Each reads a shrunk median market-cap-to-TVL multiple from its own peer set, applies this protocol's momentum, maturity and footprint adjustments, and names the largest traded protocols behind the number. ${r.model.distinct_peers} distinct traded peers stand behind this row across the three sets.${r.product_reason ? ' The lenses price the underlying business before the product discount; the headline applies the discount to the fitted value, so the lenses can read above it without disagreeing with it.' : ''}</p>
     <div class="lenses">
       ${lensBlock('Category lens', { multiple: m.lens_category_multiple, peers: m.lens_category_peers, implied_usd: m.lens_category_usd, comps: r.comps.category }, 'the radar-3 statistic: its own category’s traded peers')}
       ${lensBlock('Chain lens', { multiple: m.lens_chain_multiple, peers: m.lens_chain_peers, implied_usd: m.lens_chain_usd, comps: r.comps.chain }, 'traded peers deployed on its main chain, whatever their category')}
@@ -233,6 +250,8 @@ function methodView() {
     <p><b>${esc(v.winner_name)}</b> prices this board (median error ${win.median_abs_log_error.toFixed(4)}, fitted coefficients: ${esc(coefs)}). Two things are worth noticing. The plain category medians radar-3 shipped finish behind even the flat control once the adjustments are tested honestly — the adjustment stack, applied to raw category medians, was double-counting what size already explains. And no candidate is good in absolute terms: the best of them is still a factor of two off on a typical peer. That is the market being priced, not a defect this page hides — it is why every row carries a range and a confidence score instead of a bare number.</p>
     <h3>Ranges from 200 refits</h3>
     <p>The winner is refit on 200 bootstrap resamples of the peer set (seeded, so the board is byte-for-byte reproducible) and every row is re-priced by each refit. A row's range is its refits' 10th–90th percentile; its rank range is the refits' 5th–95th. A row whose price survives resampling wears a narrow range; a row resting on a handful of peers wears a wide one.</p>
+    <h3>The product discount: all ${R.stats.pre_token} pre-token protocols are ranked</h3>
+    <p>The house's watchlist is a floor, never a ceiling, so this board ranks every protocol that records no token — including the ${R.stats.products_size} the snapshot's own record marks as products of a token that already trades. The screen is the watchlist's own: a product category (Liquid Staking, Liquid Restaking, Restaked BTC, Bridge, Canonical Bridge, CEX), a version marker at the end of the name, a whole word wrapped, staked or staking in the name, or an exchange's name at its start. A product's TVL is real, but it is the parent asset parked inside a wrapper: a token the product issued could claim the wrapper's own fees and governance, never the parked assets, which belong to the parent token's holders. So a product row is priced in two printed steps — the fitted curve values the business its TVL describes, then a discount cuts that value to the share its own token could claim: ×${R.model.haircut_exchange} for an exchange's entry (tracked reserves are customer assets, not a business seeking a launch), ×${R.model.haircut_wrapper} for a wrapper or staking product, ×${R.model.haircut_bridge} for a bridge product (a fee stream on flow, not the assets in transit), ×${R.model.haircut_version} for a numbered version of a traded protocol (a real business, discounted because a second token would split the parent's claim rather than add to it). The factors are constants of the model, stated here and printed on every such row with its curve value, so a reader who disagrees with a factor can recompute the row in one multiplication. The bootstrap ranges and rank ranges are computed after the discount, so they describe the figure the board actually prints.</p>
     <h3>Confidence and the three lenses</h3>
     <p>Every row is also priced three independent ways — by its category's peers, by its main chain's peers, and by peers within 3× of its TVL — with the largest names behind each lens printed on its page. Confidence (0–100) is half the count of distinct peers behind the three lenses (24 or more saturates) and half their agreement: when the lenses spread by 1.5× or more the row is flagged <i>lenses-disagree</i> and the agreement half scores zero. On the giants the category lens is the outlier — small traded curators price at ratios the fitted curve, reading the whole universe's size shape, will not follow — and the row's page shows all three numbers so the reader can judge the argument rather than the headline.</p>
     <h3>Farm verdicts, netted</h3>
@@ -242,12 +261,12 @@ function methodView() {
     <h3>Every category's peer evidence</h3>
     <div class="twrap"><table><thead><tr><th>Category</th><th class="num">Priced peers</th><th class="num">Shrunk median</th><th class="num">Peer p25 – p75</th><th>Evidence</th></tr></thead><tbody>${catRows}</tbody></table></div>
     <h3>Limits, stated</h3>
-    <p>The snapshot is one day (${esc(R.as_of)}) and a sealed one: prices and TVL are that day's record, and a board rebuilt on another day's snapshot would rank differently. The floor of ${fmt(R.floor_usd)} is the snapshot's own — this entry reads the snapshot it is given and nothing else. Implied value is a model's statement about what a launch could price at, never a promise that a launch happens, and the set-aside annex exists because some protocols should not be priced at all: a wrapper of other protocols has no launch value of its own to estimate.</p>
+    <p>The snapshot is one day (${esc(R.as_of)}) and a sealed one: prices and TVL are that day's record, and a board rebuilt on another day's snapshot would rank differently. The floor of ${fmt(R.floor_usd)} is the snapshot's own — this entry reads the snapshot it is given and nothing else. Implied value is a model's statement about what a launch could price at, never a promise that a launch happens. Nothing is set aside: the ${R.stats.products_size} products of traded tokens are ranked with their discount stated, because a radar that hides the largest names in the snapshot leaves the reader to wonder whether it saw them at all.</p>
   </main>` + footer();
 }
 
 function footer() {
-  return `<footer>Built from the sealed snapshot alone — no live prices, no names hardcoded. Board, launched set and annex together account for all ${R.stats.protocols} protocols: ${R.stats.board_size} ranked + ${R.stats.live_size} launched + ${R.stats.excluded_size} set aside.</footer>`;
+  return `<footer>Built from the sealed snapshot alone — no live prices, no names hardcoded. Board and launched set together account for all ${R.stats.protocols} protocols: ${R.stats.board_size} ranked + ${R.stats.live_size} launched. Nothing is set aside.</footer>`;
 }
 
 function bindBoard() {
@@ -270,7 +289,7 @@ function route() {
     if (r) { detailView(r); window.scrollTo(0, 0); return; }
   }
   if (h === '#/live') { liveView(); return; }
-  if (h === '#/set-aside') { asideView(); return; }
+  if (h === '#/products') { productsView(); return; }
   if (h === '#/method') { methodView(); return; }
   boardView();
 }

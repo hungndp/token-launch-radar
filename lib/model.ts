@@ -1,4 +1,4 @@
-// The token radar's model (radar-4): one sealed snapshot of the protocol universe in, one ranked
+// The token radar's model (radar-5): one sealed snapshot of the protocol universe in, one ranked
 // board of pre-token protocols out — and this time the pricing model is not asserted, it is
 // FITTED to the snapshot's own traded protocols and TESTED out of sample before it prices a
 // single launch.
@@ -40,8 +40,19 @@
 // chain, over its own hold window) and states the cost beside the capital, the cost as a share
 // of the implied value, and a verdict — farm, thin or skip — from thresholds stated in the
 // methodology. And the universe is accounted for in full: every one of the snapshot's protocols
-// is ranked on the board, listed in the already-launched set, or set aside with the reason
-// printed next to it. Nothing is silently dropped.
+// is ranked on the board or listed in the already-launched set. Nothing is set aside.
+//
+// Radar-5 closes the one gap radar-4 left: radar-4 ranked only the pre-token protocols that
+// stand alone, and set 144 aside as products of tokens that already trade — a wrapper, a
+// bridged or staked product, a numbered version, an exchange's own entry. The watchlist the
+// house publishes is a floor, never a ceiling, so radar-5 ranks all 342 pre-token protocols.
+// A product row is priced honestly rather than hopefully: the fitted curve values the business
+// its TVL describes, and then a product discount — a published constant per product class —
+// cuts that value to what a token issued by the product itself could claim, because the assets
+// parked in a wrapper belong to the parent token's holders, not to a new one. The discount,
+// its class and its reason are printed on the row and in its detail view, never applied
+// silently: the reader sees the curve's value, the factor and the result, and can disagree
+// with the factor while keeping the value.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -67,7 +78,7 @@ export interface Snapshot {
 }
 
 /** The model's version label, stated on the dashboard. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
 
 /** The model's constants, stated on the dashboard so the claim can be re-run by hand. */
 export const MODEL = {
@@ -90,6 +101,18 @@ export const MODEL = {
   scale_band: 3,
   lens_disagree_spread: 1.5,
   farm_cost_pct_max: 0.005,
+  // The product discounts: the share of the fitted curve's value a token issued by a product
+  // of an already-traded token could claim. The parked assets belong to the parent token's
+  // holders; what is left for a new token is the product's own economics — thinnest for an
+  // exchange's tracked reserves (customer assets, not a business seeking a launch), thin for
+  // a wrapper or staking product (a fee and governance claim on other people's assets),
+  // thicker for a bridge (a fee stream on flow through it) and thickest for a numbered
+  // version of a traded protocol (a real business of its own, discounted because a second
+  // token would split the parent's claim rather than add to it).
+  haircut_wrapper: 0.2,
+  haircut_bridge: 0.3,
+  haircut_version: 0.35,
+  haircut_exchange: 0.1,
 } as const;
 
 /** Categories whose members are a product of another asset, not a launch candidate of their own. */
@@ -105,23 +128,44 @@ export function recordsToken(p: SnapshotProtocol): boolean {
   return p.mcap_usd !== null || p.gecko_id !== null || p.symbol !== null;
 }
 
+/** The four ways a pre-token record can be a product of a token that already trades. */
+export type ProductClass = 'wrapper' | 'bridge' | 'version' | 'exchange';
+
+/** One product classification: its class, the discount the class carries, and the reason in words. */
+export interface ProductInfo {
+  cls: ProductClass;
+  haircut: number;
+  reason: string;
+}
+
+/**
+ * How this protocol is a product of a traded token, or null when it stands alone. The screen
+ * is the snapshot's own markers — the same ones the house's watchlist rule reads: a product
+ * category, a version marker at the end of the name, a whole word wrapped, staked or staking
+ * in the name, or an exchange's name at its start. Radar-4 set the matches aside; radar-5
+ * ranks them with the class's discount, so the screen now prices instead of excluding.
+ */
+export function productInfo(p: SnapshotProtocol): ProductInfo | null {
+  if (p.category !== null && PRODUCT_CATEGORIES.has(p.category)) {
+    const reason = `a ${p.category.toLowerCase()} product of a token that already trades`;
+    if (p.category === 'Bridge' || p.category === 'Canonical Bridge') return { cls: 'bridge', haircut: MODEL.haircut_bridge, reason };
+    if (p.category === 'CEX') return { cls: 'exchange', haircut: MODEL.haircut_exchange, reason };
+    return { cls: 'wrapper', haircut: MODEL.haircut_wrapper, reason };
+  }
+  if (VERSIONED.test(p.name)) return { cls: 'version', haircut: MODEL.haircut_version, reason: 'a numbered version of a protocol that already trades' };
+  if (PRODUCT_WORD.test(p.name)) return { cls: 'wrapper', haircut: MODEL.haircut_wrapper, reason: 'a wrapped or staked product of an asset that already trades' };
+  if (EXCHANGE_PREFIX.test(p.name)) return { cls: 'exchange', haircut: MODEL.haircut_exchange, reason: 'an exchange product, not an independent launch' };
+  return null;
+}
+
 /** Why a pre-token protocol is a product of a traded token rather than a launch, or null. */
 export function exclusionReason(p: SnapshotProtocol): string | null {
-  if (p.category !== null && PRODUCT_CATEGORIES.has(p.category)) return `a ${p.category.toLowerCase()} product of a token that already trades`;
-  if (VERSIONED.test(p.name)) return 'a numbered version of a protocol that already trades';
-  if (PRODUCT_WORD.test(p.name)) return 'a wrapped or staked product of an asset that already trades';
-  if (EXCHANGE_PREFIX.test(p.name)) return 'an exchange product, not an independent launch';
-  return null;
+  return productInfo(p)?.reason ?? null;
 }
 
 /** Whether this record is a wrapped, staked, bridged or exchange product of something that trades. */
 export function isProduct(p: SnapshotProtocol): boolean {
-  return exclusionReason(p) !== null;
-}
-
-/** Whether the board may rank this protocol: it records no token and is no product of one. */
-export function isRankable(p: SnapshotProtocol): boolean {
-  return !recordsToken(p) && !isProduct(p);
+  return productInfo(p) !== null;
 }
 
 const DAY_MS = 86_400_000;
@@ -475,12 +519,16 @@ function mulberry32(seed: number): () => number {
 /**
  * Refit the winning candidate on bootstrap resamples of the peer set and re-price every board
  * candidate: per protocol, the refits' implied values and ranks, for the published ranges.
+ * The optional transform is applied to each refit's price before values and ranks are read —
+ * the board passes its product discount, so a product row's range and rank range describe the
+ * discounted figure it actually prints, not the curve's undiscounted read.
  */
 export function bootstrapRanges(
   peers: PricedPeer[],
   winnerId: string,
   targets: SnapshotProtocol[],
   asOf: string,
+  transform?: (p: SnapshotProtocol, value: number) => number,
 ): Map<string, { values: number[]; ranks: number[] }> {
   const candidate = CANDIDATES.find((c) => c.id === winnerId)!;
   const rand = mulberry32(MODEL.bootstrap_seed);
@@ -490,7 +538,10 @@ export function bootstrapRanges(
     const sample: PricedPeer[] = [];
     for (let i = 0; i < peers.length; i++) sample.push(peers[Math.floor(rand() * peers.length)]!);
     const predict = candidate.fit(sample);
-    const scored = targets.map((p) => ({ slug: p.slug, value: predict(p, adjs.get(p.slug)!) }));
+    const scored = targets.map((p) => {
+      const raw = predict(p, adjs.get(p.slug)!);
+      return { slug: p.slug, value: transform === undefined ? raw : transform(p, raw) };
+    });
     scored.sort((x, y) => y.value - x.value || (x.slug < y.slug ? -1 : 1));
     scored.forEach((s, i) => {
       const cell = collected.get(s.slug)!;
@@ -576,9 +627,10 @@ export function evidenceFor(peerCount: number): Evidence {
  */
 export function flagsFor(
   p: SnapshotProtocol,
-  v: { peer: CategoryMultiple; momentumMult: number; age: number | null; lensSpread: number },
+  v: { peer: CategoryMultiple; momentumMult: number; age: number | null; lensSpread: number; product: boolean },
 ): string[] {
   const flags: string[] = [];
+  if (v.product) flags.push('traded-parent-product');
   if (v.peer.peers === 0) flags.push('no-category-peers');
   else if (v.peer.peers <= 2) flags.push('thin-evidence');
   if (v.lensSpread >= MODEL.lens_disagree_spread) flags.push('lenses-disagree');
@@ -676,6 +728,20 @@ function playbookFor(p: SnapshotProtocol): Playbook {
       open: (n, ch, $) => `Bridge $${$} of USDC from Ethereum to ${ch} through ${n}, then put the bridged funds to work in one app on the far side the same day.`,
       second: (n, ch, $) => `Bridge a smaller amount, about $${Math.max(25, Math.round($ / 4))}, back through ${n} a week later, so the wallet has honest routes in both directions.`,
       weekly: (n) => `Make one small bridge through ${n} each week and use the destination chain afterwards; volume with a purpose counts more than round trips.`,
+    };
+  }
+  if (c.includes('staking') || c.includes('restaked')) {
+    return {
+      open: (n, ch, $) => `Mint $${$} of ${n}'s receipt token on ${ch} with the underlying asset and hold the receipt in the farming wallet; do not sell it into a pool the same week.`,
+      second: (n, ch, $) => `Put about $${Math.max(25, Math.round($ / 4))} of the receipt token to work in the deepest pool or vault that lists it on ${ch}, so the wallet both holds and supplies it.`,
+      weekly: (n) => `Check the receipt token's exchange rate and ${n}'s programme page once a week; staking rooms count holders across snapshots, not churn.`,
+    };
+  }
+  if (c.includes('cex') || c.includes('exchange')) {
+    return {
+      open: (n, ch, $) => `Complete ${n}'s account verification, deposit $${$}, and subscribe it to the exchange's launchpool or earn product rather than leaving the balance idle.`,
+      second: (n, ch, $) => `Take the smallest allocation in one live launchpool campaign on ${n} and hold whatever it farms until that campaign's distribution ends.`,
+      weekly: (n) => `Check ${n}'s launchpool calendar once a week and roll the deposit into the next campaign when one closes; idle balances earn nothing.`,
     };
   }
   if (c.includes('perpetual') || c.includes('derivative') || c.includes('options')) {
@@ -855,6 +921,8 @@ export interface BoardRow {
   symbol: string | null;
   token_status: 'pre-token';
   watchlist: boolean;
+  /** Why this row is a product of a traded token, or null when it stands alone. */
+  product_reason: string | null;
   age_days: number | null;
   implied_value_usd: number;
   implied_low_usd: number;
@@ -867,6 +935,10 @@ export interface BoardRow {
   conviction: number;
   model: {
     fitted_model: string;
+    /** The fitted model's value before the product discount: the business the TVL describes. */
+    gross_value_usd: number;
+    /** The product discount applied to the gross value: 1 when the row stands alone. */
+    product_haircut: number;
     peer_multiple: number;
     peer_multiple_p25: number;
     peer_multiple_p75: number;
@@ -904,16 +976,7 @@ export interface LiveRow {
   mcap_tvl: number | null;
 }
 
-/** A pre-token protocol set aside rather than ranked, with the reason printed next to it. */
-export interface ExcludedRow {
-  slug: string;
-  name: string;
-  category: string | null;
-  tvl_usd: number;
-  reason: string;
-}
-
-/** Everything the dashboard renders: the board, the launched set, the annex and the model. */
+/** Everything the dashboard renders: the board, the launched set and the model. */
 export interface RadarData {
   as_of: string;
   source: string;
@@ -926,7 +989,7 @@ export interface RadarData {
     board_size: number;
     watchlist_size: number;
     live_size: number;
-    excluded_size: number;
+    products_size: number;
     token_bearing: number;
     peers_priced: number;
     aggregate_implied_usd: number;
@@ -938,7 +1001,6 @@ export interface RadarData {
   categories: { category: string; peers: number; multiple: number; multiple_p25: number; multiple_p75: number; evidence: Evidence }[];
   rows: BoardRow[];
   live: LiveRow[];
-  excluded: ExcludedRow[];
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -986,9 +1048,12 @@ export function parseSnapshot(text: string): Snapshot {
   return { as_of: o.as_of, source: o.source, floor_usd: o.floor_usd, protocols, watchlist: o.watchlist as string[] };
 }
 
-/** The protocols the board ranks: the watchlist whole, plus every rankable pre-token protocol. */
+/**
+ * The protocols the board ranks: the watchlist whole, plus every protocol that records no
+ * token — products of traded tokens included, priced with their discount. The board's subject
+ * is the pre-token universe entire; the house's watchlist is its floor, never its ceiling.
+ */
 function boardCandidates(snapshot: Snapshot): SnapshotProtocol[] {
-  const watch = new Set(snapshot.watchlist);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
   for (const slug of snapshot.watchlist) {
@@ -996,9 +1061,8 @@ function boardCandidates(snapshot: Snapshot): SnapshotProtocol[] {
     if (p !== undefined) chosen.set(slug, p);
   }
   for (const p of snapshot.protocols) {
-    if (!chosen.has(p.slug) && isRankable(p)) chosen.set(p.slug, p);
+    if (!chosen.has(p.slug) && !recordsToken(p)) chosen.set(p.slug, p);
   }
-  void watch;
   return [...chosen.values()];
 }
 
@@ -1010,17 +1074,24 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
   const predict = winner.fit(peers);
   const table = categoryMultiples(peers);
   const candidates = boardCandidates(snapshot);
-  const ranges = bootstrapRanges(peers, validation.winner, candidates, snapshot.as_of);
+  const ranges = bootstrapRanges(peers, validation.winner, candidates, snapshot.as_of, (p, value) => value * (productInfo(p)?.haircut ?? 1));
   const logTvls = candidates.map((p) => Math.log10(Math.max(p.tvl_usd, 1)));
   const logMin = Math.min(...logTvls);
   const logMax = Math.max(...logTvls);
   const watch = new Set(snapshot.watchlist);
   const scored = candidates.map((p) => {
     const adj = adjustmentsFor(p, snapshot.as_of);
-    const implied = Math.max(1, Math.round(predict(p, adj)));
+    const product = productInfo(p);
+    const haircut = product?.haircut ?? 1;
+    // The fitted model prices the business the TVL describes; a product of a traded token is
+    // then cut to the share of that value its own token could claim, and the row prints both.
+    const gross = Math.max(1, Math.round(predict(p, adj)));
+    const implied = Math.max(1, Math.round(gross * haircut));
     const lens = lensesFor(p, adj, peers, table.global);
     const lensValues = [lens.category.implied_usd, lens.chain.implied_usd, lens.scale.implied_usd];
-    const spread = (Math.max(...lensValues) - Math.min(...lensValues)) / Math.max(implied, 1);
+    // The lenses cross-examine the business, so their spread is read against the gross value:
+    // the product discount is a stated step after the comparison, not part of the disagreement.
+    const spread = (Math.max(...lensValues) - Math.min(...lensValues)) / Math.max(gross, 1);
     const peer = table.byCategory.get(p.category ?? 'Uncategorised') ?? {
       category: p.category ?? 'Uncategorised',
       peers: 0,
@@ -1038,6 +1109,9 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     return {
       p,
       adj,
+      product,
+      gross,
+      haircut,
       implied,
       low,
       high,
@@ -1049,7 +1123,7 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
       signal,
       evidence,
       confidence,
-      flags: flagsFor(p, { peer, momentumMult: adj.momentumMult, age: adj.age, lensSpread: spread }),
+      flags: flagsFor(p, { peer, momentumMult: adj.momentumMult, age: adj.age, lensSpread: spread, product: product !== null }),
       farm: farmEconomics(p, adj.age, signal, evidence, implied, confidence),
     };
   });
@@ -1068,6 +1142,7 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     symbol: s.p.symbol,
     token_status: 'pre-token' as const,
     watchlist: watch.has(s.p.slug),
+    product_reason: s.product?.reason ?? null,
     age_days: s.adj.age,
     implied_value_usd: s.implied,
     implied_low_usd: s.low,
@@ -1080,6 +1155,8 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     conviction: s.signal,
     model: {
       fitted_model: validation.winner,
+      gross_value_usd: s.gross,
+      product_haircut: s.haircut,
       peer_multiple: round4(s.peer.multiple),
       peer_multiple_p25: round4(s.peer.p25),
       peer_multiple_p75: round4(s.peer.p75),
@@ -1123,15 +1200,6 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
-/** Every pre-token protocol the board sets aside, each with its reason, largest first. */
-export function excludedRows(snapshot: Snapshot): ExcludedRow[] {
-  const watch = new Set(snapshot.watchlist);
-  return snapshot.protocols
-    .filter((p) => !recordsToken(p) && !watch.has(p.slug) && !isRankable(p))
-    .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : 1))
-    .map((p) => ({ slug: p.slug, name: p.name, category: p.category, tvl_usd: p.tvl_usd, reason: exclusionReason(p)! }));
-}
-
 /** Everything the entry hands in: the board for board.json and the data the dashboard renders. */
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
   const board = buildBoard(snapshot);
@@ -1139,7 +1207,6 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   const validation = runValidation(peers);
   const table = categoryMultiples(peers);
   const live = liveRows(snapshot);
-  const excluded = excludedRows(snapshot);
   const preToken = snapshot.protocols.filter((p) => !recordsToken(p)).length;
   const verdicts = { farm: 0, thin: 0, skip: 0 };
   for (const r of board) verdicts[r.farm.verdict]++;
@@ -1155,7 +1222,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       board_size: board.length,
       watchlist_size: snapshot.watchlist.length,
       live_size: live.length,
-      excluded_size: excluded.length,
+      products_size: board.filter((r) => r.product_reason !== null).length,
       token_bearing: snapshot.protocols.length - preToken,
       peers_priced: peers.length,
       aggregate_implied_usd: board.reduce((sum, r) => sum + r.implied_value_usd, 0),
@@ -1176,7 +1243,6 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       .sort((a, b) => b.peers - a.peers || (a.category < b.category ? -1 : 1)),
     rows: board,
     live,
-    excluded,
   };
   return { board, radar };
 }

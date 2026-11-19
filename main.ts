@@ -92,7 +92,7 @@ for (const name of shots) {
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: DASHBOARD_CAPS }));
 
 process.stdout.write(
-  `token radar: ${snapshot.protocols.length} protocols scanned, ${radar.stats.pre_token} record no token, ${board.length} ranked (${snapshot.watchlist.length} watchlist, ${board.length - snapshot.watchlist.length} early), ${radar.live.length} live shown apart, ${radar.excluded.length} set aside with reasons — every protocol accounted for\n` +
+  `token radar: ${snapshot.protocols.length} protocols scanned, ${radar.stats.pre_token} record no token, ${board.length} ranked (${snapshot.watchlist.length} watchlist, ${board.length - snapshot.watchlist.length} early), ${radar.live.length} live shown apart, ${radar.stats.products_size} of the ranked are products of traded tokens priced with the product discount — every protocol accounted for\n` +
     `token radar: model fitted by leave-one-out over ${radar.validation.peers_priced} priced peers — winner ${radar.validation.winner_name}; farm verdicts farm ${radar.stats.farm_verdicts.farm} / thin ${radar.stats.farm_verdicts.thin} / skip ${radar.stats.farm_verdicts.skip}\n` +
     `token radar: wrote board.json, data.js, dashboard/ (${pageFiles.length} files), screenshots/ (${shots.length} images) and dossier.json in ${out}\n`,
 );
