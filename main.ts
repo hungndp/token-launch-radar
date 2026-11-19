@@ -2,12 +2,14 @@
 //
 // Repository anchor: makefun anchor 03ef0526461042bf85ede8c97ec580c2d9de36e4 round 34041901
 //
-// The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores
-// every pre-token protocol with the model in lib/model.ts, writes the ranked board to
-// /output/board.json, writes the dashboard's data to /output/data.js, copies this repository's
-// dashboard/ and screenshots/ into /output, and writes /output/dossier.json last with
-// buildDossier from vendor/makefun-board.ts (the kit's library, byte for byte the scorer's own
-// copy), so the dossier the judge reads is exactly the one the scorer rebuilds.
+// The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), fits
+// the pricing model in lib/model.ts to the snapshot's own traded protocols (a leave-one-out
+// contest among five candidates picks the winner), scores every pre-token protocol with it,
+// writes the ranked board to /output/board.json, writes the dashboard's data to /output/data.js,
+// copies this repository's dashboard/ and screenshots/ into /output, and writes
+// /output/dossier.json last with buildDossier from vendor/makefun-board.ts (the kit's library,
+// byte for byte the scorer's own copy), so the dossier the judge reads is exactly the one the
+// scorer rebuilds.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
@@ -90,6 +92,7 @@ for (const name of shots) {
 writeFileSync(join(out, 'dossier.json'), buildDossier(out, { text_max_bytes: TEXT_MAX_BYTES, screenshots: SCREENSHOT_CAPS, dashboard: DASHBOARD_CAPS }));
 
 process.stdout.write(
-  `token radar: ${snapshot.protocols.length} protocols scanned, ${radar.stats.pre_token} record no token, ${board.length} ranked (${snapshot.watchlist.length} watchlist, ${board.length - snapshot.watchlist.length} early), ${radar.live.length} live shown apart\n` +
+  `token radar: ${snapshot.protocols.length} protocols scanned, ${radar.stats.pre_token} record no token, ${board.length} ranked (${snapshot.watchlist.length} watchlist, ${board.length - snapshot.watchlist.length} early), ${radar.live.length} live shown apart, ${radar.excluded.length} set aside with reasons — every protocol accounted for\n` +
+    `token radar: model fitted by leave-one-out over ${radar.validation.peers_priced} priced peers — winner ${radar.validation.winner_name}; farm verdicts farm ${radar.stats.farm_verdicts.farm} / thin ${radar.stats.farm_verdicts.thin} / skip ${radar.stats.farm_verdicts.skip}\n` +
     `token radar: wrote board.json, data.js, dashboard/ (${pageFiles.length} files), screenshots/ (${shots.length} images) and dossier.json in ${out}\n`,
 );
